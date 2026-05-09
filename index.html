@@ -9,9 +9,10 @@
 body {
   background:#1a0f05;
   display:flex; flex-direction:column; align-items:center;
-  min-height:100vh; height:100dvh;
+  height:var(--vh,100dvh);
   font-family:'Segoe UI',system-ui,sans-serif;
   overflow:hidden; touch-action:none; user-select:none;
+  overscroll-behavior:none;
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 #hud {
@@ -1215,6 +1216,13 @@ function loop(ts) {
   draw(ts);
   requestAnimationFrame(loop);
 }
+// Use window.innerHeight for --vh so Chrome/Firefox mobile toolbars don't push dpad off screen
+function updateVH() {
+  document.documentElement.style.setProperty('--vh', window.innerHeight + 'px');
+}
+updateVH();
+window.addEventListener('resize', updateVH);
+
 // Restore mute preference (AC not yet created — setMute without AC just sets flag + icon)
 if (localStorage.getItem('ottos_muted') === '1') {
   isMuted = true;
