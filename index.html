@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Otto's Great Escape</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -12,6 +12,7 @@ body {
   min-height:100vh; height:100dvh;
   font-family:'Segoe UI',system-ui,sans-serif;
   overflow:hidden; touch-action:none; user-select:none;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 #hud {
   width:100%; max-width:min(420px,100vw);
@@ -386,7 +387,11 @@ function startMusic(theme, fadeDur = 1.5) {
     const next = t0 + loopLen;
     musicLoopId = setTimeout(() => sched(next), Math.max(0, (next - AC.currentTime - 0.1) * 1000));
   }
-  sched(startT);
+  if (AC.state === 'suspended') {
+    AC.resume().then(() => sched(AC.currentTime + 0.05));
+  } else {
+    sched(startT);
+  }
 }
 
 // ─────────────────────────────────────────────
