@@ -24,9 +24,12 @@ body {
 #game-wrap {
   position:relative; width:100%; max-width:min(420px,100vw);
   flex:1; min-height:0; display:flex; align-items:center; justify-content:center;
-  touch-action:none;
+  touch-action:none; overflow:hidden;
 }
-canvas { display:block; border-radius:10px; touch-action:none; user-select:none; -webkit-user-select:none; }
+canvas {
+  display:block; width:100%; max-height:100%; aspect-ratio:1/1;
+  border-radius:10px; touch-action:none; user-select:none; -webkit-user-select:none;
+}
 #dpad {
   display:grid;
   grid-template-columns:repeat(3,clamp(64px,18vw,72px));
@@ -257,12 +260,19 @@ function initAudio() {
   masterGain = AC.createGain(); masterGain.gain.value = isMuted ? 0 : 1; masterGain.connect(AC.destination);
   sfxGain = AC.createGain(); sfxGain.gain.value = 0.7; sfxGain.connect(masterGain);
   musicGain = AC.createGain(); musicGain.gain.value = 0; musicGain.connect(masterGain);
+  // Play a silent buffer — required to unlock audio on iOS Safari
+  const buf = AC.createBuffer(1, 1, 22050);
+  const src = AC.createBufferSource(); src.buffer = buf;
+  src.connect(AC.destination); src.start(0);
 }
 
-document.addEventListener('pointerdown', () => {
+function audioUnlock() {
   initAudio();
   if (AC.state === 'suspended') AC.resume();
-}, { capture: true });
+}
+['touchstart','pointerdown','click'].forEach(t =>
+  document.addEventListener(t, audioUnlock, { capture:true, passive:true })
+);
 
 function setMute(m) {
   isMuted = m;
@@ -408,12 +418,6 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const RES = 480;
 canvas.width = canvas.height = RES;
-// Fit canvas in available space without overflowing vertically
-new ResizeObserver(() => {
-  const wrap = document.getElementById('game-wrap');
-  const sz = Math.min(wrap.clientWidth, wrap.clientHeight);
-  if (sz > 0) { canvas.style.width = sz + 'px'; canvas.style.height = sz + 'px'; }
-}).observe(document.getElementById('game-wrap'));
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 document.getElementById('dpad').addEventListener('contextmenu', e => e.preventDefault());
 
