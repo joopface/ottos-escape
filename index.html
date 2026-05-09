@@ -33,7 +33,7 @@ canvas {
 #dpad {
   display:grid;
   grid-template-columns:repeat(3,clamp(64px,18vw,72px));
-  grid-template-rows:repeat(3,clamp(64px,18vw,72px));
+  grid-template-rows:repeat(2,clamp(64px,18vw,72px));
   gap:5px; padding:8px 0 12px; flex-shrink:0;
   max-width:min(420px,100vw); touch-action:none;
 }
@@ -78,11 +78,8 @@ canvas {
 </div>
 <div id="game-wrap"><canvas id="c"></canvas></div>
 <div id="dpad">
-  <div class="db blank"></div>
-  <div class="db" id="bu">▲</div>
-  <div class="db blank"></div>
   <div class="db" id="bl">◀</div>
-  <div class="db blank"></div>
+  <div class="db" id="bu">▲</div>
   <div class="db" id="br">▶</div>
   <div class="db blank"></div>
   <div class="db" id="bd">▼</div>
@@ -349,8 +346,8 @@ const MUSIC = {
 };
 
 function stopMusic(fadeDur = 0.8) {
+  clearInterval(musicLoopId); musicLoopId = null;
   if (!AC) return;
-  clearTimeout(musicLoopId); musicLoopId = null;
   const now = AC.currentTime;
   musicGain.gain.cancelScheduledValues(now);
   musicGain.gain.setValueAtTime(musicGain.gain.value, now);
@@ -366,42 +363,37 @@ function startMusic(theme, fadeDur = 1.5) {
   stopMusic(0.4);
   currentTheme = theme;
   const def = MUSIC[theme]; if (!def) return;
-  const beat = 60 / def.bpm, chordLen = beat * 2, loopLen = chordLen * 4;
-  const startT = AC.currentTime + 0.05;
+  const beat = 60 / def.bpm;
+  const chordMs = beat * 2 * 1000;
+  let ci = 0;
   musicGain.gain.cancelScheduledValues(AC.currentTime);
   musicGain.gain.setValueAtTime(0, AC.currentTime);
   musicGain.gain.linearRampToValueAtTime(0.5, AC.currentTime + fadeDur);
 
-  function sched(t0) {
-    if (currentTheme !== theme) return;
-    def.chords.forEach((ch, ci) => {
-      const cs = t0 + ci * chordLen;
-      ch.tones.forEach(f => {
-        const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
-        const g = AC.createGain();
-        g.gain.setValueAtTime(0, cs); g.gain.linearRampToValueAtTime(0.055, cs + 0.05);
-        g.gain.setValueAtTime(0.055, cs + chordLen - 0.06); g.gain.linearRampToValueAtTime(0, cs + chordLen);
-        o.connect(g); g.connect(musicGain); o.start(cs); o.stop(cs + chordLen + 0.02);
-        musicNodes.push(o);
-      });
-      [0, beat].forEach(off => {
-        const ns = cs + off;
-        const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = ch.mel;
-        const g = AC.createGain();
-        g.gain.setValueAtTime(0, ns); g.gain.linearRampToValueAtTime(0.13, ns + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, ns + beat * 0.8);
-        o.connect(g); g.connect(musicGain); o.start(ns); o.stop(ns + beat);
-        musicNodes.push(o);
-      });
+  function playChord() {
+    if (currentTheme !== theme || !AC || AC.state !== 'running') return;
+    const ch = def.chords[ci % def.chords.length]; ci++;
+    const now = AC.currentTime, dur = beat * 2;
+    ch.tones.forEach(f => {
+      const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+      const g = AC.createGain();
+      g.gain.setValueAtTime(0.055, now);
+      g.gain.setValueAtTime(0.055, now + dur - 0.06);
+      g.gain.linearRampToValueAtTime(0, now + dur);
+      o.connect(g); g.connect(musicGain); o.start(now); o.stop(now + dur + 0.02);
+      musicNodes.push(o);
     });
-    const next = t0 + loopLen;
-    musicLoopId = setTimeout(() => sched(next), Math.max(0, (next - AC.currentTime - 0.1) * 1000));
+    [0, beat].forEach(off => {
+      const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = ch.mel;
+      const g = AC.createGain(); const ns = now + off;
+      g.gain.setValueAtTime(0.13, ns);
+      g.gain.exponentialRampToValueAtTime(0.0001, ns + beat * 0.8);
+      o.connect(g); g.connect(musicGain); o.start(ns); o.stop(ns + beat + 0.01);
+      musicNodes.push(o);
+    });
   }
-  if (AC.state === 'suspended') {
-    AC.resume().then(() => sched(AC.currentTime + 0.05));
-  } else {
-    sched(startT);
-  }
+  playChord();
+  musicLoopId = setInterval(playChord, chordMs);
 }
 
 // ─────────────────────────────────────────────
