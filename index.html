@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Otto's Great Escape</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#1a0f05;
+  display:flex; flex-direction:column; align-items:center;
+  min-height:100vh; height:100dvh;
+  font-family:'Segoe UI',system-ui,sans-serif;
+  overflow:hidden; touch-action:none; user-select:none;
+}
+#hud {
+  width:100%; max-width:min(420px,100vw);
+  display:flex; justify-content:space-between; align-items:center;
+  padding:6px 10px; color:#f5e6c8; font-size:clamp(11px,3.2vw,14px); font-weight:700;
+  flex-shrink:0; gap:4px;
+}
+#hud-timer.urgent { color:#ef4444; }
+#game-wrap {
+  position:relative; width:100%; max-width:min(420px,100vw);
+  flex:1; min-height:0; display:flex; align-items:center; justify-content:center;
+  touch-action:none;
+}
+canvas { display:block; border-radius:10px; touch-action:none; user-select:none; -webkit-user-select:none; }
+#dpad {
+  display:grid;
+  grid-template-columns:repeat(3,clamp(64px,18vw,72px));
+  grid-template-rows:repeat(3,clamp(64px,18vw,72px));
+  gap:5px; padding:8px 0 12px; flex-shrink:0;
+  max-width:min(420px,100vw); touch-action:none;
+}
+.db {
+  background:rgba(255,255,255,0.12); border:2px solid rgba(255,255,255,0.25);
+  border-radius:14px; color:#f5e6c8; font-size:20px;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer; -webkit-tap-highlight-color:transparent;
+  transition:background 0.08s, transform 0.08s;
+  touch-action:none; min-width:64px; min-height:64px;
+  -webkit-touch-callout:none; user-select:none;
+}
+.db:active { background:rgba(255,255,255,0.3); transform:scale(0.93); }
+.db.blank { background:none; border:none; pointer-events:none; }
+#overlay {
+  position:fixed; inset:0; background:rgba(15,8,2,0.92);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  color:#f5e6c8; z-index:20; gap:10px;
+}
+#overlay h1 { font-size:36px; text-align:center; line-height:1.2; }
+#overlay .sub { font-size:15px; opacity:0.75; text-align:center; }
+.btn {
+  background:#e8a435; color:#1a0f05; border:none; border-radius:28px;
+  padding:14px 44px; font-size:17px; font-weight:800; cursor:pointer;
+  box-shadow:0 4px 20px rgba(232,164,53,0.4); margin-top:8px;
+  transition:transform 0.1s;
+}
+.btn:active { transform:scale(0.95); }
+.stars { font-size:30px; letter-spacing:4px; }
+#dog-canvas { display:block; margin:0 auto; width:80px; height:88px; }
+#mute-btn { background:none; border:none; color:#f5e6c8; font-size:18px; cursor:pointer; padding:0 2px; line-height:1; -webkit-tap-highlight-color:transparent; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <span id="hud-level">Level 1</span>
+  <span id="hud-bones">🦴 0 / 0</span>
+  <span id="hud-levers"></span>
+  <span id="hud-timer"></span>
+  <button id="mute-btn" onclick="setMute(!isMuted)">🔊</button>
+</div>
+<div id="game-wrap"><canvas id="c"></canvas></div>
+<div id="dpad">
+  <div class="db blank"></div>
+  <div class="db" id="bu">▲</div>
+  <div class="db blank"></div>
+  <div class="db" id="bl">◀</div>
+  <div class="db blank"></div>
+  <div class="db" id="br">▶</div>
+  <div class="db blank"></div>
+  <div class="db" id="bd">▼</div>
+  <div class="db blank"></div>
+</div>
+
+<div id="overlay">
+  <canvas id="dog-canvas" width="100" height="110"></canvas>
+  <h1>Otto's<br>Great Escape</h1>
+  <p class="sub">Help Otto find his way home!</p>
+  <button class="btn" id="play-btn">Play</button>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// TILE TYPES
+// ─────────────────────────────────────────────
+const W=0, F=1, E=2, B=3, P=4, C=5, LV=6, LD=7, DL=8;
+// LV=lever(unpulled)  LD=lever(pulled)  DL=locked door
+
+// ─────────────────────────────────────────────
+// THEMES
+// ─────────────────────────────────────────────
+const THEMES = {
+  indoor: {
+    bg:'#2a1508',
+    floor1:'#f0ddb8', floor2:'#ebe0b0',
+    wallFace:'#5c3d1e', wallTop:'#8a6038', wallSide:'#3a2410',
+  },
+  conservatory: {
+    bg:'#0c2422',
+    floor1:'#c8e8e0', floor2:'#b8ddd6',
+    wallFace:'#2b6e6e', wallTop:'#4aa8a8', wallSide:'#153838',
+  },
+  garden: {
+    bg:'#122e08',
+    floor1:'#72be72', floor2:'#62ae62',
+    wallFace:'#235f12', wallTop:'#389018', wallSide:'#112e08',
+  },
+};
+function getTheme(){ return THEMES[(G.lvl && G.lvl.theme) || 'indoor']; }
+
+// ─────────────────────────────────────────────
+// LEVEL DATA
+// ─────────────────────────────────────────────
+const LEVELS = [
+  { // Level 1 — Living Room
+    name:"Living Room", timer:0, theme:'indoor',
+    ottoStart:{x:1,y:1},
+    map:[
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,F,F,F,F,F,F,F,F,F,F,W],
+      [W,F,B,F,W,W,F,W,W,F,F,W],
+      [W,F,F,F,F,F,F,F,F,F,B,W],
+      [W,W,F,W,F,F,F,F,W,F,F,W],
+      [W,F,F,F,F,B,F,F,F,F,F,W],
+      [W,F,W,F,F,F,F,F,F,W,F,W],
+      [W,F,F,F,W,F,F,W,F,F,F,W],
+      [W,F,B,F,F,F,F,F,F,F,F,W],
+      [W,F,F,W,W,F,F,W,W,F,F,W],
+      [W,F,F,F,F,F,F,F,F,F,E,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+    ],
+    cats:[
+      { path:[{x:1,y:5},{x:10,y:5}], speed:1.2, dir:1 },
+    ],
+  },
+  { // Level 2 — Hallways
+    name:"Hallways", timer:0, theme:'indoor',
+    ottoStart:{x:1,y:1},
+    map:[
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,F,F,F,W,F,F,F,W,B,F,W],
+      [W,F,B,F,W,F,W,F,W,F,F,W],
+      [W,F,F,F,F,F,W,F,F,F,F,W],
+      [W,W,W,F,W,F,W,F,W,W,F,W],
+      [W,F,F,F,W,B,F,F,W,F,F,W],
+      [W,F,P,F,W,F,W,F,F,F,W,W],
+      [W,F,F,F,F,F,W,F,W,F,F,W],
+      [W,W,F,W,W,F,W,B,W,P,F,W],
+      [W,F,F,F,F,F,F,F,F,F,F,W],
+      [W,B,F,W,W,F,W,W,F,F,E,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+    ],
+    cats:[
+      { path:[{x:1,y:3},{x:5,y:3},{x:5,y:7}], speed:1.5, dir:1 },
+      { path:[{x:9,y:1},{x:9,y:3},{x:10,y:3},{x:10,y:5}], speed:1.9, dir:1 },
+    ],
+  },
+  { // Level 3 — Conservatory (crumble, timer, lever)
+    name:"Conservatory", timer:90, theme:'conservatory',
+    ottoStart:{x:1,y:1},
+    levers:[{leverPos:{x:4,y:4}, unlocksPos:{x:9,y:10}}],
+    map:[
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,F,F,F,F,F,F,F,B,F,F,W],
+      [W,F,W,C,C,C,C,W,F,F,F,W],
+      [W,F,W,C,F,F,C,W,F,W,F,W],
+      [W,B,F,C,LV,B,C,F,F,W,F,W],
+      [W,F,F,C,F,F,C,F,P,F,F,W],
+      [W,F,W,C,C,C,C,W,F,P,F,W],
+      [W,F,F,F,F,F,F,F,F,F,B,W],
+      [W,W,F,W,W,F,W,W,F,W,F,W],
+      [W,F,F,F,P,F,F,F,F,F,W,W],
+      [W,B,F,W,F,F,W,F,F,DL,E,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+    ],
+    cats:[
+      // BUG FIX: start moved from (1,1) to (1,2) — was colliding with Otto spawn
+      { path:[{x:1,y:2},{x:1,y:7},{x:2,y:7}], speed:1.6, dir:1 },
+      { path:[{x:8,y:1},{x:10,y:1},{x:10,y:7}], speed:2.0, dir:1 },
+    ],
+  },
+  { // Level 4 — Garden (lever)
+    name:"The Garden", timer:75, theme:'garden',
+    ottoStart:{x:1,y:1},
+    levers:[{leverPos:{x:2,y:9}, unlocksPos:{x:9,y:10}}],
+    map:[
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,F,F,W,B,F,F,W,F,B,F,W],
+      [W,F,W,W,F,W,F,W,F,W,F,W],
+      [W,B,F,F,F,W,F,F,F,F,F,W],
+      [W,W,W,F,W,F,W,W,C,C,W,W],
+      [W,F,F,F,F,B,F,F,C,C,F,W],
+      [W,F,W,W,F,W,F,W,C,C,F,W],
+      [W,F,F,F,F,W,B,F,F,F,F,W],
+      [W,W,F,W,F,W,W,W,F,W,W,W],
+      [W,F,LV,F,F,F,F,F,F,F,W,W],
+      [W,B,F,W,F,F,W,F,F,DL,E,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+    ],
+    cats:[
+      { path:[{x:1,y:5},{x:1,y:7},{x:3,y:7}], speed:1.8, dir:1 },
+      { path:[{x:4,y:1},{x:6,y:1},{x:6,y:3}], speed:2.0, dir:1 },
+      { path:[{x:6,y:3},{x:10,y:3}], speed:2.3, dir:1 },
+    ],
+  },
+  { // Level 5 — The Park (lever)
+    name:"The Park", timer:60, theme:'garden',
+    ottoStart:{x:1,y:1},
+    levers:[{leverPos:{x:5,y:9}, unlocksPos:{x:9,y:10}}],
+    map:[
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,F,F,W,B,F,C,C,F,B,F,W],
+      [W,F,W,W,F,W,C,C,F,W,F,W],
+      [W,B,F,F,F,W,F,F,P,F,F,W],
+      [W,W,F,W,C,C,W,P,F,F,W,W],
+      [W,F,F,F,C,C,F,F,B,F,F,W],
+      [W,F,W,F,C,C,F,W,C,C,F,W],
+      [W,F,B,F,F,F,F,F,C,C,F,W],
+      [W,W,F,W,F,W,W,F,F,F,W,W],
+      [W,F,F,F,B,LV,F,F,P,F,W,W],
+      [W,B,F,W,F,F,W,F,F,DL,E,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W],
+    ],
+    cats:[
+      { path:[{x:1,y:9},{x:7,y:9}], speed:2.0, dir:1 },
+      { path:[{x:10,y:1},{x:10,y:3},{x:9,y:3},{x:9,y:5},{x:10,y:5},{x:10,y:7}], speed:2.2, dir:1 },
+      { path:[{x:1,y:5},{x:3,y:5},{x:3,y:7}], speed:1.8, dir:1 },
+      { path:[{x:1,y:7},{x:7,y:7}], speed:2.5, dir:1 },
+    ],
+  },
+];
+
+// ─────────────────────────────────────────────
+// AUDIO
+// ─────────────────────────────────────────────
+let AC = null, masterGain, sfxGain, musicGain;
+let isMuted = false, currentTheme = null, musicNodes = [], musicLoopId = null;
+let urgentTickLast = -1, leverWasZero = false, leverFlashId = null;
+
+function initAudio() {
+  if (AC) return;
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = AC.createGain(); masterGain.gain.value = isMuted ? 0 : 1; masterGain.connect(AC.destination);
+  sfxGain = AC.createGain(); sfxGain.gain.value = 0.7; sfxGain.connect(masterGain);
+  musicGain = AC.createGain(); musicGain.gain.value = 0; musicGain.connect(masterGain);
+}
+
+document.addEventListener('pointerdown', () => {
+  initAudio();
+  if (AC.state === 'suspended') AC.resume();
+}, { capture: true });
+
+function setMute(m) {
+  isMuted = m;
+  if (AC) masterGain.gain.setValueAtTime(m ? 0 : 1, AC.currentTime);
+  document.getElementById('mute-btn').textContent = m ? '🔇' : '🔊';
+  localStorage.setItem('ottos_muted', m ? '1' : '0');
+}
+
+function sfxNote(freq, type, tStart, dur, peak) {
+  if (!AC) return;
+  const g = AC.createGain(); g.connect(sfxGain);
+  g.gain.setValueAtTime(0, tStart);
+  g.gain.linearRampToValueAtTime(peak, tStart + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, tStart + dur);
+  const o = AC.createOscillator(); o.type = type; o.frequency.value = freq;
+  o.connect(g); o.start(tStart); o.stop(tStart + dur + 0.01);
+}
+
+function sfxNoise(tStart, dur, peak) {
+  if (!AC) return;
+  const len = Math.ceil(AC.sampleRate * dur);
+  const buf = AC.createBuffer(1, len, AC.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const src = AC.createBufferSource(); src.buffer = buf;
+  const g = AC.createGain(); g.connect(sfxGain);
+  g.gain.setValueAtTime(peak, tStart); g.gain.exponentialRampToValueAtTime(0.0001, tStart + dur);
+  src.connect(g); src.start(tStart); src.stop(tStart + dur + 0.01);
+}
+
+function playMove()  { if (!AC) return; sfxNote(220, 'sine', AC.currentTime, 0.06, 0.07); }
+function playBone()  { if (!AC) return; const t=AC.currentTime; sfxNote(523.25,'sine',t,0.08,0.25); sfxNote(659.25,'sine',t+0.08,0.08,0.25); }
+function playLever() { if (!AC) return; const t=AC.currentTime; sfxNoise(t,0.12,0.3); sfxNote(80,'sine',t,0.12,0.4); }
+function playUrgentTick() { if (!AC) return; sfxNote(880,'sine',AC.currentTime,0.04,0.1); }
+
+function playDeath() {
+  if (!AC) return;
+  const t = AC.currentTime;
+  const g = AC.createGain(); g.connect(sfxGain);
+  g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+  const o = AC.createOscillator(); o.type = 'triangle';
+  o.frequency.setValueAtTime(400, t); o.frequency.exponentialRampToValueAtTime(80, t + 0.6);
+  o.connect(g); o.start(t); o.stop(t + 0.65);
+}
+
+function playFanfare() {
+  if (!AC) return;
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+    const t = AC.currentTime + i * 0.1;
+    sfxNote(f, 'sine', t, 0.12, 0.3);
+    sfxNote(f, 'sine', t + 0.06, 0.18, 0.08); // reverb tail
+  });
+}
+
+const MUSIC = {
+  indoor:       { bpm:88,  chords:[
+    { tones:[261.63,329.63,392.00], mel:523.25 },
+    { tones:[349.23,440.00,523.25], mel:698.46 },
+    { tones:[220.00,261.63,329.63], mel:440.00 },
+    { tones:[196.00,246.94,293.66], mel:392.00 },
+  ]},
+  conservatory: { bpm:72,  chords:[
+    { tones:[220.00,261.63,329.63], mel:440.00 },
+    { tones:[293.66,349.23,440.00], mel:587.33 },
+    { tones:[164.81,207.65,246.94], mel:329.63 },
+    { tones:[220.00,261.63,329.63], mel:440.00 },
+  ]},
+  garden:       { bpm:104, chords:[
+    { tones:[392.00,493.88,587.33], mel:783.99 },
+    { tones:[523.25,659.25,783.99], mel:1046.5  },
+    { tones:[293.66,369.99,440.00], mel:587.33 },
+    { tones:[392.00,493.88,587.33], mel:783.99 },
+  ]},
+};
+
+function stopMusic(fadeDur = 0.8) {
+  if (!AC) return;
+  clearTimeout(musicLoopId); musicLoopId = null;
+  const now = AC.currentTime;
+  musicGain.gain.cancelScheduledValues(now);
+  musicGain.gain.setValueAtTime(musicGain.gain.value, now);
+  musicGain.gain.linearRampToValueAtTime(0, now + fadeDur);
+  const snap = [...musicNodes]; musicNodes = [];
+  setTimeout(() => snap.forEach(n => { try { n.stop(); } catch(e){} }), (fadeDur + 0.15) * 1000);
+  currentTheme = null;
+}
+
+function startMusic(theme, fadeDur = 1.5) {
+  if (!AC) return;
+  if (currentTheme === theme) return;
+  stopMusic(0.4);
+  currentTheme = theme;
+  const def = MUSIC[theme]; if (!def) return;
+  const beat = 60 / def.bpm, chordLen = beat * 2, loopLen = chordLen * 4;
+  const startT = AC.currentTime + 0.05;
+  musicGain.gain.cancelScheduledValues(AC.currentTime);
+  musicGain.gain.setValueAtTime(0, AC.currentTime);
+  musicGain.gain.linearRampToValueAtTime(0.5, AC.currentTime + fadeDur);
+
+  function sched(t0) {
+    if (currentTheme !== theme) return;
+    def.chords.forEach((ch, ci) => {
+      const cs = t0 + ci * chordLen;
+      ch.tones.forEach(f => {
+        const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+        const g = AC.createGain();
+        g.gain.setValueAtTime(0, cs); g.gain.linearRampToValueAtTime(0.055, cs + 0.05);
+        g.gain.setValueAtTime(0.055, cs + chordLen - 0.06); g.gain.linearRampToValueAtTime(0, cs + chordLen);
+        o.connect(g); g.connect(musicGain); o.start(cs); o.stop(cs + chordLen + 0.02);
+        musicNodes.push(o);
+      });
+      [0, beat].forEach(off => {
+        const ns = cs + off;
+        const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = ch.mel;
+        const g = AC.createGain();
+        g.gain.setValueAtTime(0, ns); g.gain.linearRampToValueAtTime(0.13, ns + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ns + beat * 0.8);
+        o.connect(g); g.connect(musicGain); o.start(ns); o.stop(ns + beat);
+        musicNodes.push(o);
+      });
+    });
+    const next = t0 + loopLen;
+    musicLoopId = setTimeout(() => sched(next), Math.max(0, (next - AC.currentTime - 0.1) * 1000));
+  }
+  sched(startT);
+}
+
+// ─────────────────────────────────────────────
+// SCORE
+// ─────────────────────────────────────────────
+let sessionScore = 0;
+function getHighScore() { return parseInt(localStorage.getItem('ottos_hiscore') || '0'); }
+function saveHighScore(s) { localStorage.setItem('ottos_hiscore', String(s)); }
+
+// ─────────────────────────────────────────────
+// CANVAS
+// ─────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const RES = 480;
+canvas.width = canvas.height = RES;
+// Fit canvas in available space without overflowing vertically
+new ResizeObserver(() => {
+  const wrap = document.getElementById('game-wrap');
+  const sz = Math.min(wrap.clientWidth, wrap.clientHeight);
+  if (sz > 0) { canvas.style.width = sz + 'px'; canvas.style.height = sz + 'px'; }
+}).observe(document.getElementById('game-wrap'));
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+document.getElementById('dpad').addEventListener('contextmenu', e => e.preventDefault());
+
+const ROWS = 12, COLS = 12;
+const TS = RES / COLS; // 40
+
+// ─────────────────────────────────────────────
+// GAME STATE
+// ─────────────────────────────────────────────
+let G = {};
+
+function newLevel(idx) {
+  if (idx === 0) sessionScore = 0;
+  urgentTickLast = -1; leverWasZero = false; clearTimeout(leverFlashId);
+  const lvl = LEVELS[idx];
+  const map = lvl.map.map(r => [...r]);
+  let totalBones = 0;
+  map.forEach(r => r.forEach(t => { if (t===B) totalBones++; }));
+
+  const crumble = {};
+  map.forEach((r,y) => r.forEach((t,x) => { if(t===C) crumble[`${x},${y}`]='solid'; }));
+
+  const cats = lvl.cats.map(c => ({
+    path: c.path,
+    speed: c.speed,
+    pathIdx: 0,
+    dir: 1,
+    progress: 0,
+    gx: c.path[0].x, gy: c.path[0].y,
+  }));
+
+  G = {
+    idx, lvl, map, crumble,
+    ox: lvl.ottoStart.x, oy: lvl.ottoStart.y,
+    aFrom:{x:lvl.ottoStart.x,y:lvl.ottoStart.y}, aT:1,
+    cats,
+    bonesGot:0, totalBones,
+    timer: lvl.timer, timeLeft: lvl.timer,
+    dead:false, won:false, started:false,
+    lastTs:null,
+    crackTimers:{},
+    // Momentum
+    velocity:0, lastMoveDir:{dx:0,dy:0},
+    leanAngle:0, leanTarget:0,
+    holding:false, inertiaSlide:false,
+    // Death animation
+    dieAnim: null,
+  };
+  updateHUD();
+  startMusic(lvl.theme);
+}
+
+// ─────────────────────────────────────────────
+// MOVEMENT
+// ─────────────────────────────────────────────
+function move(dx, dy) {
+  if (!G.started || G.dead || G.won || G.aT < 1) return;
+  const nx = G.ox + dx, ny = G.oy + dy;
+  if (nx<0||ny<0||nx>=COLS||ny>=ROWS) return;
+  const tile = G.map[ny][nx];
+  if (tile===W || tile===P || tile===DL) return;
+  const ck = `${nx},${ny}`;
+  if (G.crumble[ck] === 'gone') return;
+
+  const sameDir = (G.lastMoveDir.dx===dx && G.lastMoveDir.dy===dy);
+  if (sameDir) {
+    G.velocity = Math.min(1, G.velocity + 0.3);
+  } else if (G.lastMoveDir.dx!==0 || G.lastMoveDir.dy!==0) {
+    G.velocity = Math.max(0.1, G.velocity * 0.35);
+  } else {
+    G.velocity = 0.2;
+  }
+  G.lastMoveDir = {dx, dy};
+  G.leanTarget = dx * G.velocity * 0.2;
+
+  playMove();
+  G.aFrom = {x:G.ox, y:G.oy};
+  G.ox = nx; G.oy = ny;
+  G.aT = 0;
+}
+
+// ─────────────────────────────────────────────
+// UPDATE
+// ─────────────────────────────────────────────
+function update(dt) {
+  // Death animation runs even while G.dead
+  if (G.dieAnim) {
+    G.dieAnim.t = Math.min(1, G.dieAnim.t + dt / 0.6);
+    if (G.dieAnim.t >= 1 && !G.dieAnim.shown) {
+      G.dieAnim.shown = true;
+      showOverlay(`
+        <div style="font-size:50px">🐾</div>
+        <h1>Whoops!</h1>
+        <p class="sub">Try again</p>
+        <button class="btn" onclick="retry()">Try Again</button>
+      `);
+    }
+    return;
+  }
+
+  if (G.dead || G.won) return;
+
+  if (G.aT < 1) {
+    const animSpeed = 9 + G.velocity * 6;
+    G.aT = Math.min(1, G.aT + dt * animSpeed);
+    if (G.aT >= 1) onLand();
+  }
+
+  G.leanAngle += (G.leanTarget - G.leanAngle) * Math.min(1, dt * 10);
+  if (G.aT >= 1 && !G.holding) {
+    G.velocity = Math.max(0, G.velocity - dt * 2.5);
+    G.leanTarget *= Math.max(0, 1 - dt * 4);
+  }
+
+  G.cats.forEach(cat => updateCat(cat, dt));
+
+  if (G.timer > 0) {
+    G.timeLeft -= dt;
+    if (G.timeLeft <= 0) { G.timeLeft = 0; die(); }
+    if (G.timeLeft <= 15 && G.timeLeft > 0) {
+      const tick = Math.ceil(G.timeLeft);
+      if (tick !== urgentTickLast) { urgentTickLast = tick; playUrgentTick(); }
+    }
+    updateHUD();
+  }
+
+  for (const k in G.crackTimers) {
+    G.crackTimers[k] -= dt;
+    if (G.crackTimers[k] <= 0) {
+      delete G.crackTimers[k];
+      G.crumble[k] = 'gone';
+      const [cx,cy] = k.split(',').map(Number);
+      G.map[cy][cx] = W;
+    }
+  }
+}
+
+function onLand() {
+  const {ox:x, oy:y} = G;
+  const tile = G.map[y][x];
+
+  if (tile === B) {
+    G.map[y][x] = F;
+    G.bonesGot++;
+    playBone();
+    updateHUD();
+  }
+  if (tile === E) { win(); return; }
+
+  if (tile === LV) {
+    G.map[y][x] = LD;
+    playLever();
+    const levers = G.lvl.levers;
+    if (levers) {
+      const lv = levers.find(l => l.leverPos.x===x && l.leverPos.y===y);
+      if (lv) G.map[lv.unlocksPos.y][lv.unlocksPos.x] = F;
+    }
+  }
+
+  const ck = `${x},${y}`;
+  if (G.crumble[ck] === 'solid') {
+    G.crumble[ck] = 'cracking';
+    G.crackTimers[ck] = 1.2;
+  }
+
+  if (G.inertiaSlide) {
+    G.inertiaSlide = false;
+    const {dx, dy} = G.lastMoveDir;
+    if (dx !== 0 || dy !== 0) move(dx, dy);
+  }
+
+  checkCatHit();
+}
+
+function updateCat(cat, dt) {
+  cat.progress += cat.speed * dt;
+  if (cat.progress >= 1) {
+    cat.progress = 0;
+    cat.pathIdx += cat.dir;
+    if (cat.pathIdx >= cat.path.length - 1) cat.dir = -1;
+    if (cat.pathIdx <= 0) cat.dir = 1;
+    cat.gx = cat.path[cat.pathIdx].x;
+    cat.gy = cat.path[cat.pathIdx].y;
+  }
+  checkCatHit();
+}
+
+function checkCatHit() {
+  if (G.dead) return;
+  const oe = easeOut(G.aT);
+  const opx = (G.aFrom.x + (G.ox - G.aFrom.x) * oe) * TS + TS/2;
+  const opy = (G.aFrom.y + (G.oy - G.aFrom.y) * oe) * TS + TS/2;
+
+  G.cats.forEach(cat => {
+    const from = cat.path[cat.pathIdx];
+    const ni = Math.max(0, Math.min(cat.path.length-1, cat.pathIdx + cat.dir));
+    const to = cat.path[ni];
+    const cpx = lerp(from.x, to.x, cat.progress) * TS + TS/2;
+    const cpy = lerp(from.y, to.y, cat.progress) * TS + TS/2;
+    if (Math.hypot(opx - cpx, opy - cpy) < TS * 0.62) die();
+  });
+}
+
+function die() {
+  if (G.dead) return;
+  G.dead = true;
+  G.dieAnim = { t: 0, shown: false };
+  playDeath();
+  stopMusic(0.8);
+}
+
+function win() {
+  if (G.won) return;
+  G.won = true;
+  playFanfare();
+  stopMusic(0.8);
+  const bonePoints = G.bonesGot * 10;
+  const timePoints = G.timer > 0 ? Math.floor(G.timeLeft) * 5 : 0;
+  sessionScore += bonePoints + timePoints + 50;
+  setTimeout(() => {
+    const allBones = G.bonesGot === G.totalBones;
+    const stars = allBones ? '⭐⭐⭐' : G.bonesGot > 0 ? '⭐⭐' : '⭐';
+    const isLast = G.idx >= LEVELS.length - 1;
+    showOverlay(`
+      <div class="stars">${stars}</div>
+      <h1>Level Complete!</h1>
+      <p class="sub">Bones: ${G.bonesGot} / ${G.totalBones}${G.timer ? ` · Time left: ${Math.ceil(G.timeLeft)}s` : ''}</p>
+      <p class="sub">Score: ${sessionScore}</p>
+      <button class="btn" onclick="${isLast ? 'finishGame()' : 'nextLevel()'}">${isLast ? 'You did it! 🎉' : 'Next Level →'}</button>
+    `);
+  }, 400);
+}
+
+// ─────────────────────────────────────────────
+// RENDER
+// ─────────────────────────────────────────────
+const COL = {
+  bone:'#ffffff', boneLine:'#d0d0d0',
+  puddle:'#93c5fd', puddleShine:'rgba(255,255,255,0.5)',
+  catBody:'#94a3b8', catEar:'#6b7280', catEye:'#fbbf24',
+  ottoBody:'#d4a574', ottoFur:'#e8c89a', ottoEar:'#b8865a',
+  crackLine:'rgba(80,40,10,0.6)',
+};
+
+function lerp(a,b,t){return a+(b-a)*t;}
+function easeOut(t){return 1-Math.pow(1-t,3);}
+
+function draw(ts) {
+  ctx.save();
+
+  // Screen shake: first 150ms of death animation
+  if (G.dieAnim && G.dieAnim.t < 0.15) {
+    ctx.translate((Math.random()*2-1)*3, (Math.random()*2-1)*3);
+  }
+
+  ctx.clearRect(-4,-4,RES+8,RES+8);
+  ctx.fillStyle = getTheme().bg;
+  ctx.fillRect(-4,-4,RES+8,RES+8);
+
+  drawTiles(ts);
+  G.cats.forEach(cat => drawCat(cat, ts));
+  drawOtto(ts);
+
+  ctx.restore();
+
+  // Dog portrait lives on its own overlay canvas
+  drawMenuDog(ts);
+}
+
+function drawTiles(ts) {
+  const theme = getTheme();
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) {
+    const t=G.map[r][c];
+    const x=c*TS, y=r*TS;
+    const ck=`${c},${r}`;
+
+    if(t===W) {
+      // ── 3D wall: main face ──
+      ctx.fillStyle=theme.wallFace;
+      ctx.beginPath(); ctx.roundRect(x+1,y+1,TS-2,TS-2,3); ctx.fill();
+      // Top face (lighter, 4px — simulates wall cap viewed from above)
+      ctx.fillStyle=theme.wallTop;
+      ctx.fillRect(x+2, y+1, TS-5, 4);
+      // Right side face (darker, 3px)
+      ctx.fillStyle=theme.wallSide;
+      ctx.fillRect(x+TS-4, y+2, 3, TS-3);
+      // Theme decoration
+      drawWallDecor(x, y, theme);
+
+    } else if(t===DL) {
+      drawLockedDoor(x,y);
+    } else {
+      // Floor tile
+      ctx.fillStyle=((r+c)%2===0) ? theme.floor1 : theme.floor2;
+      ctx.beginPath(); ctx.roundRect(x+1,y+1,TS-2,TS-2,2); ctx.fill();
+
+      // Grout lines — faint inner border on all floor tiles
+      ctx.strokeStyle='rgba(0,0,0,0.07)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.roundRect(x+3,y+3,TS-6,TS-6,1); ctx.stroke();
+
+      // Garden grass blades on plain floor only
+      if(theme === THEMES.garden && t===F) drawGrassBlades(x,y,c,r);
+
+      if(t===E) drawExit(x,y,ts);
+      else if(t===B) drawBone(x+TS/2, y+TS/2, ts);
+      else if(t===P) drawPuddle(x,y);
+      else if(t===LV) drawLever(x,y,false);
+      else if(t===LD) drawLever(x,y,true);
+      if(t===C || G.crumble[ck]) drawCrumble(x,y,ck,ts);
+    }
+  }
+}
+
+function drawWallDecor(x, y, theme) {
+  if(theme === THEMES.indoor) {
+    // Horizontal wood-grain panel lines
+    ctx.strokeStyle='rgba(255,210,160,0.18)'; ctx.lineWidth=1;
+    [0.38, 0.68].forEach(fy => {
+      ctx.beginPath();
+      ctx.moveTo(x+4,  y+TS*fy);
+      ctx.lineTo(x+TS-7, y+TS*fy);
+      ctx.stroke();
+    });
+  } else if(theme === THEMES.conservatory) {
+    // Glass pane: cross-bar frame
+    ctx.strokeStyle='rgba(160,230,230,0.38)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(x+4, y+TS*0.5); ctx.lineTo(x+TS-7, y+TS*0.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+TS*0.45, y+5); ctx.lineTo(x+TS*0.45, y+TS-3); ctx.stroke();
+  } else {
+    // Garden hedge: small leaf circles
+    ctx.fillStyle='rgba(80,180,40,0.32)';
+    [[0.22,0.38],[0.58,0.3],[0.38,0.62],[0.68,0.58]].forEach(([fx,fy]) => {
+      ctx.beginPath(); ctx.arc(x+TS*fx, y+TS*fy, TS*0.1, 0, Math.PI*2); ctx.fill();
+    });
+  }
+}
+
+function drawGrassBlades(x, y, c, r) {
+  const s1=(c*3+r*7)%6, s2=(c*5+r*2)%6;
+  ctx.strokeStyle='rgba(30,85,15,0.38)'; ctx.lineWidth=1; ctx.lineCap='round';
+  [[0.22+s1*0.04, 0.65, 0.18+s1*0.04, 0.32],
+   [0.55+s2*0.04, 0.72, 0.6+s2*0.04,  0.38],
+   [0.4+(s1+s2)*0.015, 0.58, 0.42+(s1+s2)*0.015, 0.28]
+  ].forEach(([x1,y1,x2,y2]) => {
+    ctx.beginPath();
+    ctx.moveTo(x+TS*x1, y+TS*y1);
+    ctx.lineTo(x+TS*x2, y+TS*y2);
+    ctx.stroke();
+  });
+}
+
+function drawLockedDoor(x,y) {
+  ctx.fillStyle='#1e1b18';
+  ctx.beginPath(); ctx.roundRect(x+1,y+1,TS-2,TS-2,3); ctx.fill();
+  ctx.strokeStyle='#4b5563'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.roundRect(x+3,y+3,TS-6,TS-6,2); ctx.stroke();
+  ctx.strokeStyle='#6b7280'; ctx.lineWidth=3; ctx.lineCap='round';
+  for(let i=0;i<4;i++){
+    const by=y+TS*0.18+i*(TS*0.185);
+    ctx.beginPath(); ctx.moveTo(x+6,by); ctx.lineTo(x+TS-6,by); ctx.stroke();
+  }
+  ctx.strokeStyle='#4b5563'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(x+TS/2,y+4); ctx.lineTo(x+TS/2,y+TS-4); ctx.stroke();
+  ctx.fillStyle='#ca8a04';
+  ctx.beginPath(); ctx.arc(x+TS/2,y+TS*0.72,TS*0.09,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#fbbf24'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.arc(x+TS/2,y+TS*0.72,TS*0.09,0,Math.PI*2); ctx.stroke();
+}
+
+function drawLever(x,y,pulled) {
+  ctx.fillStyle='#78350f';
+  ctx.beginPath(); ctx.roundRect(x+TS*0.3,y+TS*0.65,TS*0.4,TS*0.15,4); ctx.fill();
+  ctx.strokeStyle='#92400e'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(x+TS*0.3,y+TS*0.65,TS*0.4,TS*0.15,4); ctx.stroke();
+  ctx.fillStyle='#d97706';
+  ctx.beginPath(); ctx.arc(x+TS*0.5,y+TS*0.72,TS*0.05,0,Math.PI*2); ctx.fill();
+  const hx=pulled?x+TS*0.67:x+TS*0.33, hy=y+TS*0.27;
+  ctx.strokeStyle=pulled?'#4ade80':'#fbbf24'; ctx.lineWidth=4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(x+TS*0.5,y+TS*0.72); ctx.lineTo(hx,hy); ctx.stroke();
+  ctx.fillStyle=pulled?'#22c55e':'#f59e0b';
+  ctx.beginPath(); ctx.arc(hx,hy,TS*0.08,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=pulled?'#16a34a':'#d97706'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.arc(hx,hy,TS*0.08,0,Math.PI*2); ctx.stroke();
+}
+
+function drawExit(x,y,ts) {
+  const pulse=0.7+0.3*Math.sin(ts*0.003);
+  const grd=ctx.createRadialGradient(x+TS/2,y+TS/2,2,x+TS/2,y+TS/2,TS*0.55);
+  grd.addColorStop(0,`rgba(74,222,128,${0.85*pulse})`);
+  grd.addColorStop(1,'rgba(74,222,128,0)');
+  ctx.fillStyle=grd; ctx.fillRect(x,y,TS,TS);
+  ctx.fillStyle=`rgba(22,101,52,${pulse})`;
+  ctx.font=`${TS*0.55}px serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('🚪',x+TS/2,y+TS/2+1);
+}
+
+function drawBone(cx,cy,ts) {
+  const bob=Math.sin(ts*0.002+cx)*1.5;
+  ctx.save(); ctx.translate(cx,cy+bob);
+  const s=TS*0.28;
+  ctx.beginPath(); ctx.moveTo(-s,0); ctx.lineTo(s,0);
+  ctx.strokeStyle=COL.boneLine; ctx.lineWidth=s*0.55; ctx.stroke();
+  [[-s,0],[s,0],[-s*0.72,0],[s*0.72,0]].forEach(([bx,by],i)=>{
+    ctx.beginPath(); ctx.arc(bx,by,s*(i<2?0.38:0.28),0,Math.PI*2);
+    ctx.fillStyle='#fff'; ctx.fill();
+    ctx.strokeStyle='#ddd'; ctx.lineWidth=1; ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawPuddle(x,y) {
+  ctx.fillStyle='rgba(147,197,253,0.8)';
+  ctx.beginPath(); ctx.ellipse(x+TS/2,y+TS/2,TS*0.37,TS*0.3,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=COL.puddleShine;
+  ctx.beginPath(); ctx.ellipse(x+TS*0.35,y+TS*0.38,TS*0.1,TS*0.06,-0.5,0,Math.PI*2); ctx.fill();
+}
+
+function drawCrumble(x,y,ck,ts) {
+  const state=G.crumble[ck];
+  if(state==='gone') return;
+  if(state==='cracking') {
+    ctx.strokeStyle=COL.crackLine; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(x+TS*0.2,y+TS*0.2); ctx.lineTo(x+TS*0.8,y+TS*0.8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+TS*0.5,y+TS*0.1); ctx.lineTo(x+TS*0.3,y+TS*0.7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+TS*0.6,y+TS*0.3); ctx.lineTo(x+TS*0.9,y+TS*0.6); ctx.stroke();
+    ctx.fillStyle='rgba(180,120,60,0.25)'; ctx.fillRect(x,y,TS,TS);
+  } else {
+    ctx.fillStyle='#d4b896';
+    ctx.beginPath(); ctx.roundRect(x+1,y+1,TS-2,TS-2,2); ctx.fill();
+    ctx.strokeStyle='rgba(140,90,40,0.3)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x+TS*0.3,y+TS*0.4); ctx.lineTo(x+TS*0.7,y+TS*0.6); ctx.stroke();
+  }
+}
+
+function drawOttoBody(r) {
+  // Shared body drawing for normal and death animation
+  ctx.fillStyle=COL.ottoEar;
+  ctx.beginPath(); ctx.ellipse(-r*0.7,-r*0.35,r*0.23,r*0.38,-0.35,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(r*0.7,-r*0.35,r*0.23,r*0.38,0.35,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(180,110,70,0.5)';
+  ctx.beginPath(); ctx.ellipse(-r*0.7,-r*0.35,r*0.13,r*0.24,-0.35,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(r*0.7,-r*0.35,r*0.13,r*0.24,0.35,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle=COL.ottoBody; ctx.fill();
+  ctx.beginPath(); ctx.arc(-r*0.1,-r*0.12,r*0.65,0,Math.PI*2); ctx.fillStyle=COL.ottoFur; ctx.fill();
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.strokeStyle='rgba(160,100,50,0.4)'; ctx.lineWidth=1.5; ctx.stroke();
+  const ey=-r*0.15, ex=r*0.27;
+  ctx.fillStyle='#2d1b0e';
+  ctx.beginPath(); ctx.arc(-ex,ey,r*0.1,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(ex,ey,r*0.1,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.75)';
+  ctx.beginPath(); ctx.arc(-ex+r*0.04,ey-r*0.04,r*0.04,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(ex+r*0.04,ey-r*0.04,r*0.04,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#7a3b1e';
+  ctx.beginPath(); ctx.ellipse(0,r*0.06,r*0.09,r*0.065,0,0,Math.PI*2); ctx.fill();
+}
+
+function drawOtto(ts) {
+  const e=easeOut(G.aT);
+  const px=(G.aFrom.x+(G.ox-G.aFrom.x)*e)*TS+TS/2;
+  const py=(G.aFrom.y+(G.oy-G.aFrom.y)*e)*TS+TS/2;
+  const r=TS*0.36;
+
+  // ── Death animation ──
+  if (G.dieAnim) {
+    const p = G.dieAnim.t;
+    const scale = 1 - easeOut(p);
+    if (scale <= 0.01) return;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(p * Math.PI * 2);
+    ctx.scale(scale, scale);
+    drawOttoBody(r);
+    // Red flash grows as animation progresses
+    ctx.globalAlpha = Math.min(0.85, p * 1.4);
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath(); ctx.arc(0,0,r*1.35,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    return;
+  }
+
+  // ── Normal draw ──
+  const mid=Math.sin(G.aT*Math.PI);
+  const sx=1-mid*0.14, sy=1+mid*0.18;
+
+  ctx.save();
+  ctx.translate(px,py);
+  ctx.rotate(G.leanAngle);
+  ctx.scale(sx,sy);
+
+  // Shadow — scales with velocity
+  const shadowRx = r*(0.45 + G.velocity*0.2);
+  ctx.beginPath(); ctx.ellipse(0,r*0.75,shadowRx,r*0.18,0,0,Math.PI*2);
+  ctx.fillStyle=`rgba(0,0,0,${0.15+G.velocity*0.08})`; ctx.fill();
+
+  drawOttoBody(r);
+
+  if(G.aT>=1) {
+    const wag=Math.sin(ts*0.004)*0.45;
+    ctx.save(); ctx.translate(0,r*0.7); ctx.rotate(wag);
+    ctx.beginPath(); ctx.ellipse(0,r*0.28,r*0.12,r*0.26,0,0,Math.PI*2);
+    ctx.fillStyle='#c4945f'; ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+function drawCat(cat,ts) {
+  const from=cat.path[cat.pathIdx];
+  const nextIdx=Math.max(0,Math.min(cat.path.length-1, cat.pathIdx+cat.dir));
+  const to=cat.path[nextIdx];
+  const e=easeOut(cat.progress);
+  const px=lerp(from.x,to.x,e)*TS+TS/2;
+  const py=lerp(from.y,to.y,e)*TS+TS/2;
+  const r=TS*0.29;
+
+  ctx.save(); ctx.translate(px,py);
+
+  // Shadow — scales with cat speed
+  const speedT = Math.min(1, (cat.speed - 1) / 2);
+  const catShadowRx = r*(0.4 + speedT*0.2);
+  ctx.beginPath(); ctx.ellipse(0,r*0.8,catShadowRx,r*0.16,0,0,Math.PI*2);
+  ctx.fillStyle=`rgba(0,0,0,${0.14+speedT*0.08})`; ctx.fill();
+
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.fillStyle=COL.catBody; ctx.fill();
+
+  ctx.fillStyle=COL.catEar;
+  [[-1],[1]].forEach(([sx])=>{
+    ctx.beginPath();
+    ctx.moveTo(sx*r*0.42,-r*0.55);
+    ctx.lineTo(sx*r*0.78,-r*1.08);
+    ctx.lineTo(sx*r*0.1,-r*0.82);
+    ctx.closePath(); ctx.fill();
+  });
+
+  ctx.fillStyle=COL.catEye;
+  ctx.beginPath(); ctx.arc(-r*0.3,-r*0.1,r*0.17,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(r*0.3,-r*0.1,r*0.17,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.ellipse(-r*0.3,-r*0.1,r*0.05,r*0.14,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(r*0.3,-r*0.1,r*0.05,r*0.14,0,0,Math.PI*2); ctx.fill();
+
+  const swing=Math.sin(ts*0.003+from.x)*0.5;
+  ctx.save(); ctx.translate(0,r*0.6); ctx.rotate(swing);
+  ctx.beginPath(); ctx.arc(r*0.4,-r*0.1,r*0.5,-Math.PI,0);
+  ctx.strokeStyle='#7b8a9a'; ctx.lineWidth=r*0.22; ctx.lineCap='round'; ctx.stroke();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────
+// MENU DOG PORTRAIT
+// ─────────────────────────────────────────────
+function drawMenuDog(ts) {
+  const dc = document.getElementById('dog-canvas');
+  if (!dc) return;
+  const dctx = dc.getContext('2d');
+  dctx.clearRect(0, 0, 100, 110);
+
+  const bob = Math.sin(ts * 0.002) * 5;
+  const cx = 50, cy = 52 + bob;
+
+  const BEIGE = '#d4a87a', CREAM = '#eac898', TAN = '#b07040', TANLT = '#c98e5a';
+
+  // ── Floppy ears (behind head) ──
+  function drawEar(ex, ey, rot, flip) {
+    dctx.save();
+    dctx.translate(ex, ey);
+    dctx.rotate(rot);
+    dctx.fillStyle = TAN;
+    dctx.beginPath(); dctx.ellipse(0, 14, 13, 26, 0, 0, Math.PI*2); dctx.fill();
+    dctx.fillStyle = TANLT;
+    dctx.beginPath(); dctx.ellipse(flip*2, 14, 8, 19, 0, 0, Math.PI*2); dctx.fill();
+    // Curly fur marks on ear
+    dctx.strokeStyle = 'rgba(120,60,20,0.28)'; dctx.lineWidth = 1.2; dctx.lineCap = 'round';
+    [5, 13, 21].forEach(oy => {
+      dctx.beginPath();
+      dctx.moveTo(-4, oy); dctx.quadraticCurveTo(-9, oy+2, -7, oy+6); dctx.stroke();
+    });
+    dctx.restore();
+  }
+  drawEar(cx - 21, cy - 10, -0.18,  1);
+  drawEar(cx + 21, cy - 10,  0.18, -1);
+
+  // ── Fluffy head perimeter bumps ──
+  const r = 26;
+  dctx.fillStyle = BEIGE;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    dctx.beginPath();
+    dctx.arc(cx + Math.cos(a) * (r - 5), cy + Math.sin(a) * (r - 4), 8.5, 0, Math.PI*2);
+    dctx.fill();
+  }
+
+  // ── Head fill ──
+  dctx.fillStyle = BEIGE;
+  dctx.beginPath(); dctx.arc(cx, cy, r, 0, Math.PI*2); dctx.fill();
+  // Cream highlight
+  dctx.fillStyle = CREAM;
+  dctx.globalAlpha = 0.52;
+  dctx.beginPath(); dctx.arc(cx - 5, cy - 7, r * 0.68, 0, Math.PI*2); dctx.fill();
+  dctx.globalAlpha = 1;
+  // Soft blend back
+  dctx.fillStyle = BEIGE;
+  dctx.globalAlpha = 0.28;
+  dctx.beginPath(); dctx.arc(cx, cy, r, 0, Math.PI*2); dctx.fill();
+  dctx.globalAlpha = 1;
+
+  // ── Fur texture lines ──
+  dctx.strokeStyle = 'rgba(150,80,25,0.3)'; dctx.lineWidth = 1.3; dctx.lineCap = 'round';
+  [[cx-12, cy-26, cx-8,  cy-17],
+   [cx+5,  cy-27, cx+9,  cy-18],
+   [cx-2,  cy-28, cx+1,  cy-19],
+   [cx-22, cy-14, cx-16, cy-8 ],
+   [cx+16, cy-14, cx+22, cy-8 ],
+  ].forEach(([x1,y1,x2,y2]) => {
+    dctx.beginPath(); dctx.moveTo(x1,y1); dctx.lineTo(x2,y2); dctx.stroke();
+  });
+
+  // ── Eyes ──
+  dctx.fillStyle = '#2d1b0e';
+  dctx.beginPath(); dctx.arc(cx - 9, cy - 4, 5.5, 0, Math.PI*2); dctx.fill();
+  dctx.beginPath(); dctx.arc(cx + 9, cy - 4, 5.5, 0, Math.PI*2); dctx.fill();
+  // Primary shine
+  dctx.fillStyle = 'rgba(255,255,255,0.92)';
+  dctx.beginPath(); dctx.arc(cx - 7,  cy - 6, 2.2, 0, Math.PI*2); dctx.fill();
+  dctx.beginPath(); dctx.arc(cx + 11, cy - 6, 2.2, 0, Math.PI*2); dctx.fill();
+  // Secondary tiny highlight
+  dctx.fillStyle = 'rgba(255,255,255,0.5)';
+  dctx.beginPath(); dctx.arc(cx - 11, cy - 3, 1.1, 0, Math.PI*2); dctx.fill();
+  dctx.beginPath(); dctx.arc(cx + 7,  cy - 3, 1.1, 0, Math.PI*2); dctx.fill();
+
+  // ── Nose ──
+  dctx.fillStyle = '#4a2010';
+  dctx.beginPath(); dctx.ellipse(cx, cy + 5, 6, 4.5, 0, 0, Math.PI*2); dctx.fill();
+  dctx.fillStyle = 'rgba(255,255,255,0.3)';
+  dctx.beginPath(); dctx.arc(cx - 2, cy + 3, 2, 0, Math.PI*2); dctx.fill();
+
+  // ── Smile ──
+  dctx.strokeStyle = '#7a3a18'; dctx.lineWidth = 2; dctx.lineCap = 'round';
+  dctx.beginPath();
+  dctx.moveTo(cx - 9, cy + 11);
+  dctx.quadraticCurveTo(cx, cy + 18, cx + 9, cy + 11);
+  dctx.stroke();
+
+  // ── Cheek blush ──
+  dctx.fillStyle = 'rgba(230,120,70,0.18)';
+  dctx.beginPath(); dctx.arc(cx - 17, cy + 4, 8, 0, Math.PI*2); dctx.fill();
+  dctx.beginPath(); dctx.arc(cx + 17, cy + 4, 8, 0, Math.PI*2); dctx.fill();
+}
+
+// ─────────────────────────────────────────────
+// HUD
+// ─────────────────────────────────────────────
+function updateHUD() {
+  document.getElementById('hud-level').textContent=`Level ${G.idx+1}: ${G.lvl.name}`;
+  document.getElementById('hud-bones').textContent=`🦴 ${G.bonesGot}/${G.totalBones}`;
+  // Lever counter
+  const leverEl = document.getElementById('hud-levers');
+  const hasLevers = G.lvl.levers && G.lvl.levers.length > 0;
+  if (!hasLevers) {
+    leverEl.textContent = '';
+  } else {
+    let remaining = 0;
+    G.map.forEach(r => r.forEach(t => { if (t === LV) remaining++; }));
+    if (remaining > 0) {
+      leverWasZero = false;
+      leverEl.textContent = `🔧 ${remaining}`;
+    } else if (!leverWasZero) {
+      leverWasZero = true;
+      leverEl.textContent = '✅';
+      clearTimeout(leverFlashId);
+      leverFlashId = setTimeout(() => { leverEl.textContent = ''; }, 1500);
+    }
+  }
+  const te=document.getElementById('hud-timer');
+  if(G.timer>0){
+    const s=Math.ceil(G.timeLeft);
+    te.textContent=`⏱ ${s}s`;
+    te.className=s<=15?'urgent':'';
+  } else te.textContent='';
+}
+
+// ─────────────────────────────────────────────
+// OVERLAY
+// ─────────────────────────────────────────────
+const overlay=document.getElementById('overlay');
+function showOverlay(html){ overlay.innerHTML=html; overlay.style.display='flex'; }
+function hideOverlay(){ overlay.style.display='none'; }
+
+function retry(){
+  hideOverlay();
+  canvas.style.transition = '';
+  canvas.style.transform  = '';
+  canvas.style.opacity    = '';
+  newLevel(G.idx); G.started=true;
+}
+function nextLevel(){
+  hideOverlay();
+  // Phase 1 — zoom out + fade to black (0.4s)
+  canvas.style.transition = 'transform 0.4s ease-in, opacity 0.4s ease-in';
+  canvas.style.transform  = 'scale(0.6)';
+  canvas.style.opacity    = '0';
+  setTimeout(() => {
+    newLevel(G.idx + 1); G.started = true;
+    // Phase 2 — zoom in + fade in (0.4s)
+    canvas.style.transition = 'transform 0.4s ease-out, opacity 0.4s ease-out';
+    canvas.style.transform  = 'scale(1)';
+    canvas.style.opacity    = '1';
+    setTimeout(() => { canvas.style.transition = ''; }, 400);
+  }, 400);
+}
+function finishGame(){
+  const hi = getHighScore();
+  const isNew = sessionScore > hi;
+  if (isNew) saveHighScore(sessionScore);
+  showOverlay(`
+    <div style="font-size:52px">🎉</div>
+    <h1>You escaped!</h1>
+    <p class="sub">Otto is home safe 🐾</p>
+    <p class="sub">Final score: <strong>${sessionScore}</strong></p>
+    ${isNew
+      ? `<p class="sub" style="color:#4ade80">New high score! 🏆</p>`
+      : `<p class="sub">Best: ${hi}</p>`}
+    <button class="btn" onclick="hideOverlay();newLevel(0);G.started=true;">Play Again</button>
+  `);
+}
+
+// ─────────────────────────────────────────────
+// CONTROLS — hold-to-repeat (180ms initial, 120ms repeat)
+// ─────────────────────────────────────────────
+let holdTimer=null, holdInterval=null;
+
+function startHold(dx,dy){
+  G.inertiaSlide=false;
+  G.holding=true;
+  clearTimeout(holdTimer); clearInterval(holdInterval);
+  move(dx,dy);
+  holdTimer=setTimeout(()=>{
+    move(dx,dy);
+    holdInterval=setInterval(()=>move(dx,dy),120);
+  },180);
+}
+
+function clearHold(){
+  clearTimeout(holdTimer); holdTimer=null;
+  clearInterval(holdInterval); holdInterval=null;
+  if(G.started && G.velocity>0.7) G.inertiaSlide=true;
+  G.holding=false;
+}
+
+function bindBtn(id,dx,dy){
+  const el=document.getElementById(id);
+  el.addEventListener('pointerdown',e=>{e.preventDefault();startHold(dx,dy);});
+  el.addEventListener('pointerup',  e=>{e.preventDefault();clearHold();});
+  el.addEventListener('pointerleave',()=>clearHold());
+}
+bindBtn('bu',0,-1); bindBtn('bd',0,1); bindBtn('bl',-1,0); bindBtn('br',1,0);
+
+const KMAP={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0]};
+const keysHeld={};
+document.addEventListener('keydown',e=>{
+  if(KMAP[e.key]){
+    e.preventDefault();
+    if(!keysHeld[e.key]){ keysHeld[e.key]=true; startHold(...KMAP[e.key]); }
+  }
+});
+document.addEventListener('keyup',e=>{
+  if(KMAP[e.key]){ keysHeld[e.key]=false; clearHold(); }
+});
+
+// Touch swipe
+let touchStart=null;
+document.getElementById('game-wrap').addEventListener('touchstart',e=>{
+  touchStart={x:e.touches[0].clientX,y:e.touches[0].clientY};
+},{passive:true});
+document.getElementById('game-wrap').addEventListener('touchend',e=>{
+  if(!touchStart) return;
+  const dx=e.changedTouches[0].clientX-touchStart.x;
+  const dy=e.changedTouches[0].clientY-touchStart.y;
+  const adx=Math.abs(dx), ady=Math.abs(dy);
+  if(Math.max(adx,ady)<20) return;
+  if(adx>ady) move(dx>0?1:-1,0); else move(0,dy>0?1:-1);
+  touchStart=null;
+},{passive:true});
+
+document.getElementById('play-btn').addEventListener('click',()=>{
+  hideOverlay(); newLevel(0); G.started=true;
+});
+
+// ─────────────────────────────────────────────
+// GAME LOOP
+// ─────────────────────────────────────────────
+function loop(ts) {
+  const dt=G.lastTs ? Math.min((ts-G.lastTs)/1000,0.1) : 0;
+  G.lastTs=ts;
+  if(G.started) update(dt);
+  draw(ts);
+  requestAnimationFrame(loop);
+}
+// Restore mute preference (AC not yet created — setMute without AC just sets flag + icon)
+if (localStorage.getItem('ottos_muted') === '1') {
+  isMuted = true;
+  document.getElementById('mute-btn').textContent = '🔇';
+}
+newLevel(0);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
